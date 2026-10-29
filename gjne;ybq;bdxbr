@@ -1,0 +1,347 @@
+import socket
+import threading
+import queue
+import customtkinter as ctk
+
+
+HOST = "5.tcp.eu.ngrok.io"
+PORT = 21000
+
+
+class MainWindow(ctk.CTk):
+   def __init__(self):
+       super().__init__()
+
+
+       self.title("Мій чат")
+       self.geometry("650x480")
+       self.minsize(450, 350)
+
+
+       self.username = "LogikaUser"
+       self.sock = None
+       self.connected = False
+       self.messages = queue.Queue()
+       self.menu_visible = False
+
+
+       ctk.set_appearance_mode("dark")
+       ctk.set_default_color_theme("blue")
+
+
+       self.grid_columnconfigure(1, weight=1)
+       self.grid_rowconfigure(0, weight=1)
+
+
+       # Бічне меню
+       self.menu_frame = ctk.CTkFrame(self, width=160)
+       self.menu_frame.grid(row=0, column=0, sticky="ns", padx=5, pady=5)
+       self.menu_frame.grid_propagate(False)
+#кнопка надіслати
+
+       self.menu_button = ctk.CTkButton(
+           self.menu_frame,
+           text="☰ Меню",
+           command=self.toggle_menu
+       )
+       self.menu_button.pack(padx=10, pady=10)
+
+
+       self.name_label = ctk.CTkLabel(
+           self.menu_frame, text="Ваше ім'я:"
+       )
+       self.name_label.pack(padx=10, pady=(20, 5))
+
+
+       self.name_entry = ctk.CTkEntry(self.menu_frame)
+       self.name_entry.insert(0, self.username)
+       self.name_entry.pack(padx=10, fill="x")
+
+
+       self.save_button = ctk.CTkButton(
+           self.menu_frame,
+           text="Зберегти",
+           command=self.save_username
+       )
+       self.save_button.pack(padx=10, pady=10)
+
+
+       # Основна область
+       self.main_frame = ctk.CTkFrame(self)
+       self.main_frame.grid(
+           row=0, column=1, sticky="nsew", padx=5, pady=5
+       )
+
+
+       self.main_frame.grid_columnconfigure(0, weight=1)
+       self.main_frame.grid_rowconfigure(0, weight=1)
+
+
+       self.chat_field = ctk.CTkTextbox(
+           self.main_frame,
+           font=("Arial", 14),
+           wrap="word"
+#я      
+       self.chat_field.grid(
+           row=0, column=0, columnspan=2,
+           sticky="nsew", padx=10, pady=10
+       )
+       self.chat_field.configure(state="disabled") #вікно
+
+
+       self.message_entry = ctk.CTkEntry(
+           self.main_frame,
+           placeholder_text="Введіть повідомлення...",
+           height=40
+       ) #Ввід тексту
+
+
+       self.send_button = ctk.CTkButton(
+           self.main_frame,
+           text="Надіслати",
+           width=100,
+           height=40,
+           command=self.send_message
+       ) #вводить повідомлення у вікні програми
+       self.send_button.grid(
+           row=1, column=1, padx=(0, 10), pady=(0, 10)
+       ) #ставить кнопку надіслати
+
+
+       self.message_entry.bind(
+           "<Return>", lambda event: self.send_message()
+       ) #щоб надіслалося повідомлення
+#кінець
+
+       self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+
+       self.connect_to_server()
+       self.after(100, self.process_messages)
+
+
+   def toggle_menu(self):
+       self.menu_visible = not self.menu_visible
+
+
+       if self.menu_visible:
+           self.name_label.pack(padx=10, pady=(20, 5))
+           self.name_entry.pack(padx=10, fill="x")
+           self.save_button.pack(padx=10, pady=10)
+       else:
+           self.name_label.pack_forget()
+           self.name_entry.pack_forget()
+           self.save_button.pack_forget()
+
+
+   def save_username(self):
+       new_name = self.name_entry.get().strip()
+
+
+       if not new_name:
+           self.add_message("Система: Введіть ім'я.")
+           return
+
+
+       if "@" in new_name or "\n" in new_name:
+           self.add_message("Система: Ім'я не може містити @.")
+           return
+
+
+       old_name = self.username
+       self.username = new_name
+
+
+       self.add_message(
+           f"Система: Ім'я змінено на {new_name}"
+       )
+
+
+       if self.connected:
+           self.send_raw(
+               f"TEXT@{new_name}@[SYSTEM] "
+               f"{old_name} тепер має ім'я {new_name}\n"
+           )
+
+
+   def connect_to_server(self):
+       try:
+           self.sock = socket.socket(
+               socket.AF_INET, socket.SOCK_STREAM
+           )
+           self.sock.settimeout(5)
+           self.sock.connect((HOST, PORT))
+           self.sock.settimeout(None)
+
+
+           self.connected = True
+           self.add_message("Система: Підключено до сервера!")
+
+
+           self.send_raw(
+               f"TEXT@{self.username}@[SYSTEM] "
+               f"{self.username} приєднався(лась) до чату!\n"
+           )
+
+
+           threading.Thread(
+               target=self.recv_messages,
+               daemon=True
+           ).start()
+
+
+       except OSError as error:
+           self.connected = False
+           self.add_message(
+               f"Система: Не вдалося підключитися: {error}"
+           )
+           self.send_button.configure(state="disabled")
+
+
+           if self.sock:
+               self.sock.close()
+
+
+   def send_raw(self, data):
+       if not self.connected or not self.sock:
+           return False
+
+
+       try:
+           self.sock.sendall(data.encode("utf-8"))
+           return True
+       except OSError:
+           self.messages.put(
+               "Система: Помилка надсилання повідомлення."
+           )
+           return False
+
+
+   def send_message(self):
+       message = self.message_entry.get().strip()
+
+
+       if not message:
+           return
+
+
+       if not self.connected:
+           self.add_message("Система: Немає з'єднання.")
+           return
+
+
+       # Протокол сервера використовує @ як роздільник.
+       message = message.replace("\n", " ").replace("@", "＠")
+
+
+       data = f"TEXT@{self.username}@{message}\n"
+
+
+       if self.send_raw(data):
+           self.add_message(f"Я: {message}")
+           self.message_entry.delete(0, "end")
+
+
+   def recv_messages(self):
+       buffer = ""
+
+
+       try:
+           while self.connected:
+               chunk = self.sock.recv(4096)
+
+
+               if not chunk:
+                   break
+
+
+               buffer += chunk.decode(
+                   "utf-8", errors="replace"
+               )
+
+
+               while "\n" in buffer:
+                   line, buffer = buffer.split("\n", 1)
+                   self.handle_line(line.strip())
+
+
+       except OSError:
+           pass
+       finally:
+           self.connected = False
+           self.messages.put(
+               "Система: З'єднання із сервером завершено."
+           )
+           self.messages.put("__DISCONNECT__")
+
+
+   def handle_line(self, line):
+       if not line:
+           return
+
+
+       parts = line.split("@", 3)
+       msg_type = parts[0]
+
+
+       if msg_type == "TEXT" and len(parts) >= 3:
+           author = parts[1]
+           message = parts[2]
+           self.messages.put(f"{author}: {message}")
+
+
+       elif msg_type == "IMAGE" and len(parts) >= 3:
+           author = parts[1]
+           filename = parts[2]
+           self.messages.put(
+               f"{author} надіслав(ла) зображення: {filename}"
+           )
+
+
+       else:
+           self.messages.put(line)
+
+
+   def process_messages(self):
+       while not self.messages.empty():
+           message = self.messages.get_nowait()
+
+
+           if message == "__DISCONNECT__":
+               self.send_button.configure(state="disabled")
+           else:
+               self.add_message(message)
+
+
+       self.after(100, self.process_messages)
+
+
+   def add_message(self, text):
+       self.chat_field.configure(state="normal")
+       self.chat_field.insert("end", text + "\n")
+       self.chat_field.see("end")
+       self.chat_field.configure(state="disabled")
+
+
+   def on_close(self):
+       self.connected = False
+
+
+       if self.sock:
+           try:
+               self.sock.shutdown(socket.SHUT_RDWR)
+           except OSError:
+               pass
+
+
+           self.sock.close()
+
+
+       self.destroy()
+
+
+
+
+if __name__ == "__main__":
+   app = MainWindow()
+   app.mainloop()
